@@ -1,23 +1,21 @@
-import { differenceInCalendarDays } from 'date-fns';
-import { backendClient } from './backendClient';
-import { getDB } from './db';
-import { enqueueAction, processQueue, registerQueueHandler } from './offlineQueue';
+import { collection, addDoc, query, where, orderBy, getDocs, Timestamp } from 'firebase/firestore';
+import { db } from '../config/firebase';
 import { LeaveBalance, LeaveRequest } from '../types';
 
 const LEAVE_BALANCE_KEY = 'emp-pwa-leave-balance';
-const USER_ID = 'usr-1001';
-
-registerQueueHandler<LeaveRequest>('leave', async (payload) => {
-  await backendClient.leave(payload);
-  const db = await getDB();
-  await db.put('leaves', { ...payload, synced: true, status: 'pending' });
-});
 
 export const getLeaveBalance = (): LeaveBalance[] => {
   if (typeof window === 'undefined') return [];
   const raw = localStorage.getItem(LEAVE_BALANCE_KEY);
   if (!raw) {
-    return [];
+    const defaultBalance: LeaveBalance[] = [
+      { type: 'casual', available: 12, consumed: 0 },
+      { type: 'sick', available: 8, consumed: 0 },
+      { type: 'earned', available: 15, consumed: 0 },
+      { type: 'optional', available: 2, consumed: 0 },
+    ];
+    localStorage.setItem(LEAVE_BALANCE_KEY, JSON.stringify(defaultBalance));
+    return defaultBalance;
   }
   try {
     return JSON.parse(raw) as LeaveBalance[];
@@ -31,10 +29,33 @@ export const updateLeaveBalance = (balances: LeaveBalance[]) => {
   localStorage.setItem(LEAVE_BALANCE_KEY, JSON.stringify(balances));
 };
 
-export const listLeaves = async (): Promise<LeaveRequest[]> => {
-  const db = await getDB();
-  const leaves = await db.getAll('leaves');
-  return leaves.sort((a, b) => b.appliedAt - a.appliedAt);
+export const listLeaves = async (userId: string): Promise<LeaveRequest[]> => {
+  const q = query(
+    collection(db, 'leaves'),
+    where('userId', '==', userId),
+    orderBy('appliedAt', 'desc')
+  );
+
+  const querySnapshot = await getDocs(q);
+  const leaves: LeaveRequest[] = [];
+
+  querySnapshot.forEach((doc) => {
+    const data = doc.data();
+    leaves.push({
+      leaveId: doc.id,
+      userId: data.userId,
+      type: data.type,
+      startDate: data.startDate,
+      endDate: data.endDate,
+      reason: data.reason,
+      status: data.status,
+      appliedAt: data.appliedAt,
+      attachments: data.attachments || [],
+      synced: true,
+    });
+  });
+
+  return leaves;
 };
 
 export const applyLeave = async (payload: {
@@ -42,38 +63,26 @@ export const applyLeave = async (payload: {
   startDate: string;
   endDate: string;
   reason: string;
+  userId: string;
 }): Promise<LeaveRequest> => {
-  const db = await getDB();
-  const leave: LeaveRequest = {
-    leaveId: `leave_${Date.now()}`,
-    userId: USER_ID,
+  const leave = {
+    userId: payload.userId,
     type: payload.type,
     startDate: payload.startDate,
     endDate: payload.endDate,
     reason: payload.reason,
-    status: 'pending',
+    status: 'pending' as const,
     appliedAt: Date.now(),
     attachments: [],
-    synced: false,
+    createdAt: Timestamp.now(),
   };
 
-  await db.put('leaves', leave);
-  await enqueueAction('leave', leave);
-  const daysRequested = differenceInCalendarDays(new Date(payload.endDate), new Date(payload.startDate)) + 1;
-  const balances = getLeaveBalance();
-  const balanceIndex = balances.findIndex((balance) => balance.type === payload.type);
-  if (balanceIndex >= 0) {
-    balances[balanceIndex] = {
-      ...balances[balanceIndex],
-      consumed: balances[balanceIndex].consumed + daysRequested,
-    };
-    updateLeaveBalance(balances);
-  }
+  const docRef = await addDoc(collection(db, 'leaves'), leave);
 
-  if (navigator.onLine) {
-    processQueue();
-  }
-
-  return leave;
+  return {
+    leaveId: docRef.id,
+    ...leave,
+    synced: true,
+  };
 };
 

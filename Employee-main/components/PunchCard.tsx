@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from 'react';
 import CameraView from './CameraView';
-import useGeoLocation from '../hooks/useGeoLocation';
 import { addPunch } from '../services/attendanceService';
-import { PunchType } from '../types';
+import { PunchType, GeoLocation } from '../types';
 import { CameraIcon, CheckCircleIcon } from './icons';
+import { useAuth } from '../context/AuthContext';
 
 type PunchState = 'idle' | 'capturing' | 'processing' | 'success' | 'error';
 
@@ -11,24 +11,20 @@ const PunchCard: React.FC = () => {
   const [punchState, setPunchState] = useState<PunchState>('idle');
   const [punchType, setPunchType] = useState<PunchType>('IN');
   const [errorMessage, setErrorMessage] = useState<string>('');
-  const { getLocation, loading: locationLoading } = useGeoLocation();
+  const { user } = useAuth();
 
   const handlePunchClick = () => {
     setPunchState('capturing');
   };
 
   const handleCapture = useCallback(
-    async (photo: string) => {
+    async (photo: string, location: GeoLocation) => {
       setPunchState('processing');
       try {
-        const location = await getLocation();
-        if (!location) {
-          throw new Error('Location unavailable');
+        if (!user) {
+          throw new Error('User not authenticated');
         }
-        if (location.accuracy > 150) {
-          throw new Error('Location accuracy too low. Move outdoors.');
-        }
-        await addPunch({ photo, location, type: punchType });
+        await addPunch({ photo, location, type: punchType, userId: user.userId });
         setPunchState('success');
         setTimeout(() => {
           setPunchState('idle');
@@ -39,7 +35,7 @@ const PunchCard: React.FC = () => {
         setPunchState('error');
       }
     },
-    [getLocation, punchType]
+    [punchType, user]
   );
 
   const handleCameraClose = () => {
@@ -52,9 +48,7 @@ const PunchCard: React.FC = () => {
         return (
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-black mx-auto" />
-            <p className="mt-4 text-gray-600">
-              {locationLoading ? 'Locking location...' : 'Uploading securely...'}
-            </p>
+            <p className="mt-4 text-gray-600">Uploading securely...</p>
           </div>
         );
       case 'success':
@@ -62,7 +56,7 @@ const PunchCard: React.FC = () => {
           <div className="text-center text-black space-y-2">
             <CheckCircleIcon />
             <p className="font-bold text-lg">Punch {punchType} captured</p>
-            <p className="text-xs text-gray-500 uppercase tracking-wide">Synced when online</p>
+            <p className="text-xs text-gray-500 uppercase tracking-wide">Synced to cloud</p>
           </div>
         );
       case 'error':

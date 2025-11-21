@@ -1,21 +1,19 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getPunchHistory } from '../services/attendanceService';
-import { processQueue } from '../services/offlineQueue';
+import { useAuth } from '../context/AuthContext';
 
 const HistoryPage: React.FC = () => {
-  const [syncing, setSyncing] = useState(false);
+  const { user } = useAuth();
   const { data: punches = [], refetch, isFetching } = useQuery({
-    queryKey: ['punch-history'],
-    queryFn: () => getPunchHistory(),
+    queryKey: ['punch-history', user?.userId],
+    queryFn: () => (user ? getPunchHistory(user.userId) : []),
+    enabled: !!user,
     refetchInterval: 15000,
   });
 
-  const handleSync = async () => {
-    setSyncing(true);
-    await processQueue();
+  const handleRefresh = async () => {
     await refetch();
-    setSyncing(false);
   };
 
   return (
@@ -26,11 +24,11 @@ const HistoryPage: React.FC = () => {
           <p className="text-xs text-gray-500">{punches.length} records · {isFetching ? 'updating' : 'live'}</p>
         </div>
         <button
-          onClick={handleSync}
-          disabled={syncing}
+          onClick={handleRefresh}
+          disabled={isFetching}
           className="bg-black text-white px-4 py-2 rounded-lg text-sm font-semibold disabled:bg-gray-400"
         >
-          {syncing ? 'Syncing...' : 'Force sync'}
+          {isFetching ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
       {punches.length === 0 ? (

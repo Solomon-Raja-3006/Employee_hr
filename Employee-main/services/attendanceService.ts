@@ -1,62 +1,94 @@
-import { backendClient } from './backendClient';
-import { getDB } from './db';
-import { enqueueAction, processQueue, registerQueueHandler } from './offlineQueue';
+import { collection, addDoc, query, where, orderBy, getDocs, Timestamp } from 'firebase/firestore';
+import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '../config/firebase';
 import { AttendanceDay, GeoLocation, InOutEntry, PunchRecord, PunchType } from '../types';
 import { sha256 } from '../utils/hash';
-
-const USER_ID = 'usr-1001';
-
-registerQueueHandler<PunchRecord>('punch', async (payload) => {
-  await backendClient.punch(payload);
-  const db = await getDB();
-  await db.put('punches', { ...payload, synced: true });
-});
 
 export const addPunch = async ({
   photo,
   location,
   type,
+  userId,
 }: {
   photo: string;
   location: GeoLocation;
   type: PunchType;
+  userId: string;
 }): Promise<void> => {
-  const db = await getDB();
-  const hash = await sha256(`${photo.slice(0, 64)}-${location.latitude}-${location.longitude}-${Date.now()}`);
+  const timestamp = Date.now();
+  const hash = await sha256(`${photo.slice(0, 64)}-${location.latitude}-${location.longitude}-${timestamp}`);
 
-  const newPunch: PunchRecord = {
-    id: `punch_${Date.now()}`,
-    userId: USER_ID,
+  const photoRef = ref(storage, `punches/${userId}/${timestamp}.jpg`);
+  await uploadString(photoRef, photo, 'data_url');
+  const photoUrl = await getDownloadURL(photoRef);
+
+  const newPunch = {
+    userId,
     type,
-    timestamp: Date.now(),
+    timestamp,
     location,
-    photo,
+    photoUrl,
     hash,
-    synced: false,
+    synced: true,
+    createdAt: Timestamp.now(),
   };
 
-  await db.put('punches', newPunch);
-  await enqueueAction('punch', newPunch);
-
-  if (navigator.onLine) {
-    await processQueue();
-  }
+  await addDoc(collection(db, 'punches'), newPunch);
 };
 
-export const getPunchHistory = async (): Promise<PunchRecord[]> => {
-  const db = await getDB();
-  const records = await db.getAll('punches');
-  return records.sort((a, b) => b.timestamp - a.timestamp);
+export const getPunchHistory = async (userId: string): Promise<PunchRecord[]> => {
+  const q = query(
+    collection(db, 'punches'),
+    where('userId', '==', userId),
+    orderBy('timestamp', 'desc')
+  );
+
+  const querySnapshot = await getDocs(q);
+  const records: PunchRecord[] = [];
+
+  querySnapshot.forEach((doc) => {
+    const data = doc.data();
+    records.push({
+      id: doc.id,
+      userId: data.userId,
+      type: data.type,
+      timestamp: data.timestamp,
+      location: data.location,
+      photo: data.photoUrl || '',
+      hash: data.hash,
+      synced: data.synced,
+    });
+  });
+
+  return records;
 };
 
-export const getAttendanceDays = async (): Promise<AttendanceDay[]> => {
-  const db = await getDB();
-  const days = await db.getAll('attendance');
-  return days.sort((a, b) => (a.date < b.date ? 1 : -1));
+export const getAttendanceDays = async (userId: string): Promise<AttendanceDay[]> => {
+  const q = query(
+    collection(db, 'attendance'),
+    where('userId', '==', userId),
+    orderBy('date', 'desc')
+  );
+
+  const querySnapshot = await getDocs(q);
+  const days: AttendanceDay[] = [];
+
+  querySnapshot.forEach((doc) => {
+    const data = doc.data();
+    days.push({
+      date: data.date,
+      status: data.status,
+      inTime: data.inTime,
+      outTime: data.outTime,
+      notes: data.notes,
+    });
+  });
+
+  return days;
 };
 
-export const getInOutTimeline = async (): Promise<InOutEntry[]> => {
-  const punches = await getPunchHistory();
+export const getInOutTimeline = async (userId: string): Promise<InOutEntry[]> => {
+  const punches = await getPunchHistory(userId);
   return punches.map((punch) => ({
     id: punch.id,
     date: new Date(punch.timestamp).toISOString().slice(0, 10),
@@ -65,4 +97,3 @@ export const getInOutTimeline = async (): Promise<InOutEntry[]> => {
     location: punch.location,
   }));
 };
-

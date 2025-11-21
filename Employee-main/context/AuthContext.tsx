@@ -1,40 +1,38 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext } from 'react';
+import { useUser, useClerk } from '@clerk/clerk-react';
 import { UserProfile } from '../types';
-import { getStoredUser, login as loginService, logout as logoutService } from '../services/authService';
 
 interface AuthContextValue {
   user: UserProfile | null;
   loading: boolean;
-  login: (payload: { identifier: string; otp: string }) => Promise<void>;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user: clerkUser, isLoaded } = useUser();
+  const { signOut } = useClerk();
 
-  useEffect(() => {
-    const existing = getStoredUser();
-    if (existing) {
-      setUser(existing);
-    }
-    setLoading(false);
-  }, []);
+  const user: UserProfile | null = clerkUser
+    ? {
+        userId: clerkUser.id,
+        name: clerkUser.fullName || `${clerkUser.firstName} ${clerkUser.lastName}`,
+        phone: clerkUser.primaryPhoneNumber?.phoneNumber || '',
+        email: clerkUser.primaryEmailAddress?.emailAddress || '',
+        role: (clerkUser.publicMetadata?.role as string) || 'employee',
+        employeeId: (clerkUser.publicMetadata?.employeeId as string) || 'EMP-0000',
+        department: (clerkUser.publicMetadata?.department as string) || 'General',
+        profilePicUrl: clerkUser.imageUrl,
+      }
+    : null;
 
-  const login = async (payload: { identifier: string; otp: string }) => {
-    const profile = await loginService(payload);
-    setUser(profile);
-  };
-
-  const logout = () => {
-    logoutService();
-    setUser(null);
+  const logout = async () => {
+    await signOut();
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading: !isLoaded, logout }}>
       {children}
     </AuthContext.Provider>
   );
